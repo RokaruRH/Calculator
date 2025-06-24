@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -7,17 +8,51 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения из .env файла
+load_dotenv()
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
-# Токен бота (замените на свой)
-BOT_TOKEN = "7427838862:AAET4yjpqH6k8OYr4xzOkshDbZvTBo6Zpbo"
+# Получаем токен из переменных окружения с проверкой
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+# Если токен не найден через .env, попробуем альтернативные способы
+if not BOT_TOKEN:
+    print("⚠️ BOT_TOKEN не найден в .env файле")
+    print("Попытка использования токена напрямую...")
+    # Резервный токен (временное решение)
+    BOT_TOKEN = "7427838862:AAET4yjpqH6k8OYr4xzOkshDbZvTBo6Zpbo"
+
+    if not BOT_TOKEN:
+        print("❌ Ошибка: BOT_TOKEN не найден!")
+        print("Создайте файл .env в корне проекта с содержимым:")
+        print("BOT_TOKEN=7427838862:AAET4yjpqH6k8OYr4xzOkshDbZvTBo6Zpbo")
+        exit(1)
+    else:
+        print("✅ Используется резервный токен")
+
+# Дополнительная проверка типа и содержимого
+if not isinstance(BOT_TOKEN, str) or not BOT_TOKEN.strip():
+    print(f"❌ Ошибка: BOT_TOKEN должен быть непустой строкой, получен: {type(BOT_TOKEN)}")
+    exit(1)
+
+print(f"✅ Токен загружен успешно: {BOT_TOKEN[:10]}...{BOT_TOKEN[-10:]}")
 
 # Инициализация бота и диспетчера
-bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+try:
+    bot = Bot(token=BOT_TOKEN)
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+    print("✅ Бот и диспетчер инициализированы успешно")
+except Exception as e:
+    print(f"❌ Ошибка при инициализации бота: {e}")
+    exit(1)
 
 # Таблица данных для рейда
 raid_sulfur_table = {
@@ -227,13 +262,23 @@ async def unknown_message(message: types.Message):
 
 # Главная функция
 async def main():
-    print("🤖 Бот запускается...")
+    print("🤖 Rust Raid Calculator Bot запускается...")
+    print(f"🔑 Токен: {'✅ Найден' if BOT_TOKEN else '❌ Не найден'}")
+
     try:
+        # Получаем информацию о боте
+        bot_info = await bot.get_me()
+        print(f"👤 Бот @{bot_info.username} готов к работе!")
+        print("📱 Пользователи могут найти бота и отправить /start")
+        print("🔄 Для остановки нажмите Ctrl+C")
+
         await dp.start_polling(bot)
     except Exception as e:
+        logging.error(f"❌ Ошибка запуска бота: {e}")
         print(f"❌ Ошибка запуска бота: {e}")
     finally:
         await bot.session.close()
+        print("🛑 Бот остановлен")
 
 if __name__ == "__main__":
     asyncio.run(main())
