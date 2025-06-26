@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -119,13 +120,13 @@ func createCheckoutURL(userID int64) (string, error) {
 				"store": map[string]any{
 					"data": map[string]any{
 						"type": "stores",
-						"id":   lemonSqueezyConfig.StoreID, // Исправлено: использовать реальный ID магазина
+						"id":   lemonSqueezyConfig.StoreID,
 					},
 				},
 				"variant": map[string]any{
 					"data": map[string]any{
 						"type": "variants",
-						"id":   lemonSqueezyConfig.ProductID, // Исправлено: использовать реальный ID продукта
+						"id":   lemonSqueezyConfig.ProductID,
 					},
 				},
 			},
@@ -134,12 +135,12 @@ func createCheckoutURL(userID int64) (string, error) {
 
 	jsonData, err := json.Marshal(checkoutData)
 	if err != nil {
-		return "", fmt.Errorf("error marshaling checkout data: %v", err)
+		return "", fmt.Errorf("error marshaling checkout data: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", baseURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", fmt.Errorf("error creating request: %v", err)
+		return "", fmt.Errorf("error creating request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/vnd.api+json")
@@ -149,13 +150,13 @@ func createCheckoutURL(userID int64) (string, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("error making request: %v", err)
+		return "", fmt.Errorf("error making request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("error reading response: %v", err)
+		return "", fmt.Errorf("error reading response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusCreated {
@@ -171,7 +172,7 @@ func createCheckoutURL(userID int64) (string, error) {
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("error parsing response: %v", err)
+		return "", fmt.Errorf("error parsing response: %w", err)
 	}
 
 	return response.Data.Attributes.URL, nil
@@ -273,11 +274,32 @@ func handleOrderRefunded(webhook LemonSqueezyWebhook) {
 	}
 }
 
+// Отладочная функция для проверки конфигурации
+func debugConfig() {
+	fmt.Printf("=== Configuration Debug ===\n")
+	fmt.Printf("API Key present: %t\n", lemonSqueezyConfig.APIKey != "")
+	if lemonSqueezyConfig.APIKey != "" {
+		keyLen := len(lemonSqueezyConfig.APIKey)
+		prefix := min(10, keyLen)
+		fmt.Printf("API Key starts with 'lmsq_': %t\n", strings.HasPrefix(lemonSqueezyConfig.APIKey, "lmsq_"))
+		fmt.Printf("API Key length: %d\n", keyLen)
+		fmt.Printf("API Key prefix: %s...\n", lemonSqueezyConfig.APIKey[:prefix])
+	}
+	fmt.Printf("Store ID: %s\n", lemonSqueezyConfig.StoreID)
+	fmt.Printf("Product ID: %s\n", lemonSqueezyConfig.ProductID)
+	fmt.Printf("Webhook Secret present: %t\n", lemonSqueezyConfig.WebhookSecret != "")
+	fmt.Printf("============================\n")
+}
+
 // Пример использования в HTTP сервере
 func main() {
+	// Отладочная информация при запуске
+	debugConfig()
+
+	// Настройка роутов
 	http.HandleFunc("/webhook/lemonsqueezy", handleLemonSqueezyWebhook)
 
-	// Пример создания checkout URL
+	// Эндпоинт для создания checkout URL
 	http.HandleFunc("/premium/buy", func(w http.ResponseWriter, r *http.Request) {
 		userIDStr := r.URL.Query().Get("user_id")
 		if userIDStr == "" {
@@ -293,15 +315,75 @@ func main() {
 
 		checkoutURL, err := createCheckoutURL(userID)
 		if err != nil {
+			fmt.Printf("Checkout error for user %d: %v\n", userID, err)
 			http.Error(w, fmt.Sprintf("Error creating checkout: %v", err), http.StatusInternalServerError)
 			return
 		}
 
+		fmt.Printf("Checkout URL created for user %d: %s\n", userID, checkoutURL)
 		http.Redirect(w, r, checkoutURL, http.StatusTemporaryRedirect)
 	})
 
-	fmt.Println("Server starting on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		panic(err)
+	// Эндпоинт для проверки Premium статуса
+	http.HandleFunc("/premium/status", func(w http.ResponseWriter, r *http.Request) {
+		userIDStr := r.URL.Query().Get("user_id")
+		if userIDStr == "" {
+			http.Error(w, "user_id required", http.StatusBadRequest)
+			return
+		}
+
+		userID, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil {
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+
+		isPremium := isPremiumUser(userID)
+
+		response := map[string]any{
+			"user_id":    userID,
+			"is_premium": isPremium,
+		}
+
+		if user, exists := premiumUsers[userID]; exists {
+			response["order_id"] = user.OrderID
+			response["email"] = user.Email
+			response["purchase_date"] = user.PurchaseDate
+			response["is_active"] = user.IsActive
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			fmt.Printf("Error encoding response: %v\n", err)
+			http.Error(w, "Error encoding response", http.StatusInternalServerError)
+			return
+		}
+	})
+
+	// Эндпоинт для списка всех Premium пользователей (для отладки)
+	http.HandleFunc("/premium/list", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(premiumUsers); err != nil {
+			fmt.Printf("Error encoding premium users list: %v\n", err)
+			http.Error(w, "Error encoding response", http.StatusInternalServerError)
+			return
+		}
+	})
+
+	// Запуск сервера
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	fmt.Printf("Server starting on port %s\n", port)
+	fmt.Printf("Available endpoints:\n")
+	fmt.Printf("  POST /webhook/lemonsqueezy - LemonSqueezy webhook handler\n")
+	fmt.Printf("  GET  /premium/buy?user_id=123 - Create checkout URL\n")
+	fmt.Printf("  GET  /premium/status?user_id=123 - Check premium status\n")
+	fmt.Printf("  GET  /premium/list - List all premium users\n")
+
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		panic(fmt.Sprintf("Server failed to start: %v", err))
 	}
 }

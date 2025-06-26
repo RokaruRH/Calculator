@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
