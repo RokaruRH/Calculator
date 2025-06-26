@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import random
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
@@ -8,11 +10,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from dotenv import load_dotenv
-
-# Загружаем переменные окружения из .env файла
-load_dotenv()
-
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -70,6 +67,22 @@ raid_sulfur_table = {
 class RaidStates(StatesGroup):
     waiting_for_quantity = State()
 
+# Система монетизации - настройки
+MONETIZATION_CONFIG = {
+    "enabled": True,
+    "show_ads_every": 3,  # Показывать рекламу каждые 3 расчета
+    "donation_link": "https://example.com/donate",  # Замените на ваш сайт
+    "crypto_wallets": {
+        "bitcoin": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",  # Пример BTC адреса
+        "ethereum": "0x742d35Cc6634C0532925a3b8D4fB00000000000",  # Пример ETH адреса
+        "usdt_trc20": "TLrADxfy123456789abcdefghijklmnop",  # Пример USDT TRC20
+        "ton": "EQD1234567890abcdef1234567890abcdef12345678"  # Пример TON адреса
+    }
+}
+
+# Счетчик использований для рекламы
+user_usage_count = {}
+
 # Функция для создания клавиатуры с целями
 def create_targets_keyboard():
     builder = InlineKeyboardBuilder()
@@ -79,6 +92,59 @@ def create_targets_keyboard():
             callback_data=f"target_{target}"
         ))
     builder.adjust(2)  # По 2 кнопки в ряд
+    return builder.as_markup()
+
+# Функция для создания клавиатуры донатов
+def create_donation_keyboard():
+    builder = InlineKeyboardBuilder()
+
+    # Кнопка перехода на сайт
+    builder.add(InlineKeyboardButton(
+        text="💎 Поддержать проект",
+        url=MONETIZATION_CONFIG["donation_link"]
+    ))
+
+    # Кнопки с криптокошельками
+    builder.add(InlineKeyboardButton(
+        text="₿ Bitcoin",
+        callback_data="wallet_bitcoin"
+    ))
+    builder.add(InlineKeyboardButton(
+        text="Ξ Ethereum",
+        callback_data="wallet_ethereum"
+    ))
+    builder.add(InlineKeyboardButton(
+        text="₮ USDT",
+        callback_data="wallet_usdt_trc20"
+    ))
+    builder.add(InlineKeyboardButton(
+        text="💎 TON",
+        callback_data="wallet_ton"
+    ))
+
+    # Кнопка "Закрыть"
+    builder.add(InlineKeyboardButton(
+        text="❌ Закрыть",
+        callback_data="close_donation"
+    ))
+
+    builder.adjust(1, 2, 2, 1)  # Расположение кнопок
+    return builder.as_markup()
+
+# Функция для создания рекламной клавиатуры
+def create_ad_keyboard():
+    builder = InlineKeyboardBuilder()
+
+    builder.add(InlineKeyboardButton(
+        text="💎 Поддержать разработчика",
+        url=MONETIZATION_CONFIG["donation_link"]
+    ))
+    builder.add(InlineKeyboardButton(
+        text="🎯 Продолжить расчет",
+        callback_data="continue_calculation"
+    ))
+
+    builder.adjust(1)
     return builder.as_markup()
 
 # Функция для создания клавиатуры с количествами
@@ -100,10 +166,15 @@ def create_quantity_keyboard():
 # Команда /start
 @dp.message(CommandStart())
 async def start_handler(message: types.Message):
-    await message.answer(
+    welcome_text = (
         "💣 **Калькулятор рейда Rust по сере**\n\n"
         "Привет! Я помогу тебе рассчитать необходимое количество серы для рейда.\n\n"
-        "Выбери цель для разрушения:",
+        "🎯 Выбери цель для разрушения:\n\n"
+        "💡 *Если бот тебе помогает, можешь поддержать разработчика* /donate"
+    )
+
+    await message.answer(
+        welcome_text,
         reply_markup=create_targets_keyboard(),
         parse_mode="Markdown"
     )
@@ -116,14 +187,41 @@ async def help_handler(message: types.Message):
         "**Команды:**\n"
         "/start - Начать работу с ботом\n"
         "/help - Показать эту справку\n"
-        "/targets - Показать все доступные цели\n\n"
+        "/targets - Показать все доступные цели\n"
+        "/donate - Поддержать разработчика\n\n"
         "**Как использовать:**\n"
         "1. Выберите цель для разрушения\n"
         "2. Укажите количество целей\n"
         "3. Получите расчет необходимых ресурсов\n\n"
+        "💡 **Поддержка проекта:**\n"
+        "Бот бесплатный, но разработка требует времени и ресурсов.\n"
+        "Если он тебе помогает - можешь поддержать проект!\n\n"
         "Удачного рейда! 🎯"
     )
     await message.answer(help_text, parse_mode="Markdown")
+
+# Команда /donate - монетизация
+@dp.message(Command("donate"))
+async def donate_handler(message: types.Message):
+    donate_text = (
+        "💝 **Поддержка проекта**\n\n"
+        "Спасибо, что хочешь поддержать разработчика!\n\n"
+        "🎯 **Этот бот помог тебе:**\n"
+        "• Сэкономить время на расчетах\n"
+        "• Спланировать успешные рейды\n"
+        "• Избежать нехватки ресурсов\n\n"
+        "💎 **Способы поддержки:**\n"
+        "• Перейти на наш сайт для доната\n"
+        "• Отправить криптовалюту\n"
+        "• Рассказать друзьям о боте\n\n"
+        "Любая поддержка поможет развивать проект дальше! 🚀"
+    )
+
+    await message.answer(
+        donate_text,
+        reply_markup=create_donation_keyboard(),
+        parse_mode="Markdown"
+    )
 
 # Команда /targets
 @dp.message(Command("targets"))
@@ -190,14 +288,55 @@ async def custom_quantity_handler(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("⚠️ Введи корректное число. Попробуй еще раз:")
 
+# Функция для проверки показа рекламы
+def should_show_ad(user_id: int) -> bool:
+    if not MONETIZATION_CONFIG["enabled"]:
+        return False
+
+    count = user_usage_count.get(user_id, 0)
+    return count > 0 and count % MONETIZATION_CONFIG["show_ads_every"] == 0
+
+# Функция для увеличения счетчика пользователя
+def increment_user_count(user_id: int):
+    user_usage_count[user_id] = user_usage_count.get(user_id, 0) + 1
+
+# Функция для показа рекламы
+async def show_advertisement(message, user_id: int):
+    ads = [
+        "🎯 **Нравится бот?**\n\nПоддержи разработчика и получи еще больше крутых функций в будущем!",
+        "💎 **Этот бот бесплатный!**\n\nНо разработка требует времени. Твоя поддержка поможет добавить новые фичи!",
+        "🚀 **Помог с рейдом?**\n\nПоблагодари разработчика символической суммой - это очень мотивирует!",
+        "⚡ **Сэкономил серу?**\n\nПотрать немного на поддержку проекта - будет еще больше полезных ботов!"
+    ]
+
+    ad_text = random.choice(ads)
+
+    await message.answer(
+        ad_text,
+        reply_markup=create_ad_keyboard(),
+        parse_mode="Markdown"
+    )
 # Функция для обработки расчета
 async def process_calculation(message, state: FSMContext, quantity: int, callback: CallbackQuery = None):
     data = await state.get_data()
     target_name = data.get('selected_target')
+    user_id = message.chat.id if hasattr(message, 'chat') else callback.from_user.id
 
     if not target_name:
         await message.answer("❌ Ошибка: цель не выбрана. Начни заново с /start")
         return
+
+    # Увеличиваем счетчик использований
+    increment_user_count(user_id)
+
+    # Проверяем, нужно ли показать рекламу
+    if should_show_ad(user_id):
+        if callback:
+            await show_advertisement(callback.message, user_id)
+        else:
+            await show_advertisement(message, user_id)
+        # Задержка перед основным результатом
+        await asyncio.sleep(2)
 
     info = raid_sulfur_table[target_name]
 
@@ -227,6 +366,10 @@ async def process_calculation(message, state: FSMContext, quantity: int, callbac
 
     result_text += "\n🎯 Удачного рейда!"
 
+    # Добавляем призыв к действию в некоторых случаях
+    if user_usage_count.get(user_id, 0) % 5 == 0:
+        result_text += "\n\n💡 *Бот помогает? Поддержи разработчика* /donate"
+
     # Создаем кнопку для нового расчета
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Новый расчет", callback_data="new_calculation")]
@@ -241,7 +384,93 @@ async def process_calculation(message, state: FSMContext, quantity: int, callbac
     # Очищаем состояние
     await state.clear()
 
-# Обработчик кнопки "Новый расчет"
+# Обработчики для монетизации
+
+# Обработчик кнопок криптокошельков
+@dp.callback_query(F.data.startswith("wallet_"))
+async def wallet_handler(callback: CallbackQuery):
+    wallet_type = callback.data.replace("wallet_", "")
+    wallet_address = MONETIZATION_CONFIG["crypto_wallets"].get(wallet_type)
+
+    if not wallet_address:
+        await callback.answer("❌ Адрес не найден")
+        return
+
+    wallet_names = {
+        "bitcoin": "Bitcoin (BTC)",
+        "ethereum": "Ethereum (ETH)",
+        "usdt_trc20": "USDT TRC20",
+        "ton": "TON"
+    }
+
+    wallet_text = (
+        f"💰 **{wallet_names.get(wallet_type, wallet_type.upper())}**\n\n"
+        f"**Адрес для перевода:**\n"
+        f"`{wallet_address}`\n\n"
+        f"**Как отправить:**\n"
+        f"1. Скопируйте адрес выше\n"
+        f"2. Откройте свой кошелек\n"
+        f"3. Отправьте любую сумму\n"
+        f"4. Напишите @username_bot что отправили\n\n"
+        f"Спасибо за поддержку! 🙏"
+    )
+
+    # Кнопка для копирования адреса
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Скопировать адрес", callback_data=f"copy_{wallet_type}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="show_donation_menu")]
+    ])
+
+    await callback.message.edit_text(wallet_text, reply_markup=keyboard, parse_mode="Markdown")
+    await callback.answer()
+
+# Обработчик копирования адреса
+@dp.callback_query(F.data.startswith("copy_"))
+async def copy_wallet_handler(callback: CallbackQuery):
+    wallet_type = callback.data.replace("copy_", "")
+    wallet_address = MONETIZATION_CONFIG["crypto_wallets"].get(wallet_type)
+
+    if wallet_address:
+        await callback.answer(f"Адрес скопирован: {wallet_address}", show_alert=True)
+    else:
+        await callback.answer("❌ Ошибка копирования")
+
+# Показать меню доната
+@dp.callback_query(F.data == "show_donation_menu")
+async def show_donation_menu(callback: CallbackQuery):
+    donate_text = (
+        "💝 **Поддержка проекта**\n\n"
+        "Спасибо, что хочешь поддержать разработчика!\n\n"
+        "💎 **Способы поддержки:**\n"
+        "• Перейти на наш сайт для доната\n"
+        "• Отправить криптовалюту\n"
+        "• Рассказать друзьям о боте\n\n"
+        "Любая поддержка поможет развивать проект дальше! 🚀"
+    )
+
+    await callback.message.edit_text(
+        donate_text,
+        reply_markup=create_donation_keyboard(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# Закрыть меню доната
+@dp.callback_query(F.data == "close_donation")
+async def close_donation_handler(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "💣 **Калькулятор рейда Rust**\n\n"
+        "Выбери цель для разрушения:",
+        reply_markup=create_targets_keyboard(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+# Продолжить после рекламы
+@dp.callback_query(F.data == "continue_calculation")
+async def continue_calculation_handler(callback: CallbackQuery):
+    await callback.message.delete()
+    await callback.answer("Продолжаем! 🎯")
 @dp.callback_query(F.data == "new_calculation")
 async def new_calculation(callback: CallbackQuery):
     await callback.message.edit_text(
